@@ -23,7 +23,7 @@ use crate::audiobookshelf as abs;
 use crate::config::{Config, Library, LibraryLinkMethod};
 use crate::linker::{
     copy, file_size, find_matches, hard_link, libation_cats, library_dir, rank_torrents,
-    select_format, symlink,
+    select_format, storytel_cats, symlink,
 };
 use crate::logging::{update_errored_torrent, write_event};
 
@@ -132,8 +132,8 @@ async fn link_folder(
         }
         if let Some(storytel_meta) = parse_storytel_meta(&json) {
             trace!("Linking storytel folder");
-            let id = storytel_torrent_id(&storytel_meta.consumable_id);
-            let title = storytel_meta.title.clone();
+            let id = storytel_torrent_id(&storytel_meta.raw.consumable_id);
+            let title = storytel_meta.raw.title.clone();
             let result = link_storytel_folder(
                 config,
                 library,
@@ -206,7 +206,7 @@ async fn link_storytel_folder(
     config: &Config,
     library: &Library,
     db: &Database<'_>,
-    storytel_meta: StorytelRaw,
+    storytel_meta: StorytelParsed,
     audio_files: Vec<DirEntry>,
     ebook_files: Vec<DirEntry>,
     events: &crate::stats::Events,
@@ -386,16 +386,22 @@ async fn build_nextory_torrent(
 
 async fn build_storytel_torrent(
     library: &Library,
-    storytel_meta: StorytelRaw,
+    storytel_meta: StorytelParsed,
     audio_files: &[DirEntry],
     ebook_files: &[DirEntry],
 ) -> Result<Torrent> {
+    let StorytelParsed {
+        raw: storytel_meta,
+        genres,
+    } = storytel_meta;
     let StorytelRaw {
         consumable_id,
         title,
         description,
         language,
         is_abridged,
+        kids_book,
+        category,
         authors,
         narrators,
         series_info,
@@ -429,6 +435,12 @@ async fn build_storytel_torrent(
         ids.insert(ids::ISBN.to_string(), isbn);
     }
 
+    let mapped_categories = storytel_cats::map_storytel_categories(
+        category.as_ref().map(|category| category.name.as_str()),
+        &genres,
+        kids_book,
+    );
+
     let mut flags = Flags::default();
     if is_abridged {
         flags.abridged = Some(true);
@@ -441,8 +453,8 @@ async fn build_storytel_torrent(
         cat: None,
         media_type: MediaType::Audiobook,
         main_cat: None,
-        categories: vec![],
-        tags: vec![],
+        categories: mapped_categories.categories,
+        tags: mapped_categories.freeform_tags,
         language: parse_folder_language(&language),
         flags: Some(FlagBits::new(flags.as_bitfield())),
         filetypes,
@@ -644,11 +656,19 @@ fn parse_nextory_meta(json: &str) -> Option<NextoryRaw> {
     serde_json::from_str::<NextoryRaw>(json).ok()
 }
 
-fn parse_storytel_meta(json: &str) -> Option<StorytelRaw> {
+fn parse_storytel_meta(json: &str) -> Option<StorytelParsed> {
     if let Ok(meta) = serde_json::from_str::<StorytelWrapped>(json) {
-        return Some(meta.raw);
+        return Some(StorytelParsed {
+            raw: meta.raw,
+            genres: meta.genres,
+        });
     }
-    serde_json::from_str::<StorytelRaw>(json).ok()
+    serde_json::from_str::<StorytelRaw>(json)
+        .ok()
+        .map(|raw| StorytelParsed {
+            raw,
+            genres: vec![],
+        })
 }
 
 fn parse_libation_series_subtitle(subtitle: &str) -> Option<(String, String)> {
@@ -774,6 +794,14 @@ pub struct NextoryWrapped {
 #[derive(Default, Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct StorytelWrapped {
     pub raw: StorytelRaw,
+    #[serde(default)]
+    pub genres: Vec<String>,
+}
+
+#[derive(Default, Debug, Clone, PartialEq)]
+pub struct StorytelParsed {
+    pub raw: StorytelRaw,
+    pub genres: Vec<String>,
 }
 
 #[derive(Default, Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -827,6 +855,10 @@ pub struct StorytelRaw {
     #[serde(default)]
     pub is_abridged: bool,
     #[serde(default)]
+    pub kids_book: bool,
+    #[serde(default)]
+    pub category: Option<StorytelCategory>,
+    #[serde(default)]
     pub authors: Vec<StorytelName>,
     #[serde(default)]
     pub narrators: Vec<StorytelName>,
@@ -838,6 +870,11 @@ pub struct StorytelRaw {
 
 #[derive(Default, Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct StorytelName {
+    pub name: String,
+}
+
+#[derive(Default, Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct StorytelCategory {
     pub name: String,
 }
 

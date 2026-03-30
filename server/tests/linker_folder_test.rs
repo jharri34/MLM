@@ -463,9 +463,11 @@ async fn test_link_folders_to_library_storytel_wrapped_metadata() -> anyhow::Res
         Some(&"9780062693839".to_string())
     );
     assert_eq!(torrent.meta.language, Some(mlm_db::Language::English));
+    assert_eq!(torrent.meta.categories, vec![Category::YoungAdult]);
     assert_eq!(torrent.meta.series.len(), 1);
     assert_eq!(torrent.meta.series[0].name, "The Queen's Thief");
     assert_eq!(torrent.meta.series[0].entries.to_string(), "2");
+    assert!(torrent.meta.tags.is_empty());
     assert!(torrent.library_path.is_some());
 
     let expected_dir = mock_fs
@@ -503,8 +505,58 @@ async fn test_link_folders_to_library_storytel_raw_metadata() -> anyhow::Result<
     let torrent = torrent.unwrap();
     assert_eq!(torrent.meta.title, "The Queen of Attolia");
     assert_eq!(torrent.meta.authors, vec!["Megan Whalen Turner"]);
+    assert_eq!(torrent.meta.categories, vec![Category::YoungAdult]);
+    assert!(torrent.meta.tags.is_empty());
     assert_eq!(torrent.selected_audio_format, Some(".mp3".to_string()));
     assert!(torrent.library_path.is_some());
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_link_folders_to_library_storytel_fiction_maps_existing_tag() -> anyhow::Result<()> {
+    let test_db = TestDb::new()?;
+    let mock_fs = MockFs::new()?;
+    let config = Arc::new(mock_config(
+        mock_fs.rip_dir.clone(),
+        mock_fs.library_dir.clone(),
+    ));
+
+    mock_fs.create_storytel_folder_with_category("storytel_fiction", true, "Fiction")?;
+
+    link_folders_to_library(config.clone(), test_db.db.clone(), &Events::new()).await?;
+
+    let r = test_db.db.r_transaction()?;
+    let torrent: Option<Torrent> = r.get().primary("storytel_137093".to_string())?;
+    assert!(torrent.is_some());
+    let torrent = torrent.unwrap();
+
+    assert!(torrent.meta.categories.is_empty());
+    assert_eq!(torrent.meta.tags, vec!["Literature & Fiction".to_string()]);
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_link_folders_to_library_storytel_crime_maps_category() -> anyhow::Result<()> {
+    let test_db = TestDb::new()?;
+    let mock_fs = MockFs::new()?;
+    let config = Arc::new(mock_config(
+        mock_fs.rip_dir.clone(),
+        mock_fs.library_dir.clone(),
+    ));
+
+    mock_fs.create_storytel_folder_with_category("storytel_crime", false, "Crime")?;
+
+    link_folders_to_library(config.clone(), test_db.db.clone(), &Events::new()).await?;
+
+    let r = test_db.db.r_transaction()?;
+    let torrent: Option<Torrent> = r.get().primary("storytel_137093".to_string())?;
+    assert!(torrent.is_some());
+    let torrent = torrent.unwrap();
+
+    assert_eq!(torrent.meta.categories, vec![Category::Crime]);
+    assert!(torrent.meta.tags.is_empty());
 
     Ok(())
 }

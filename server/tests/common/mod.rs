@@ -263,6 +263,20 @@ impl MockFs {
         folder_name: &str,
         include_wrapped: bool,
     ) -> Result<PathBuf> {
+        self.create_storytel_folder_with_category(
+            folder_name,
+            include_wrapped,
+            "Teens & Young Adult",
+        )
+    }
+
+    #[allow(dead_code)]
+    pub fn create_storytel_folder_with_category(
+        &self,
+        folder_name: &str,
+        include_wrapped: bool,
+        category: &str,
+    ) -> Result<PathBuf> {
         let folder_path = self.rip_dir.join(folder_name);
         std::fs::create_dir_all(&folder_path)?;
 
@@ -273,6 +287,9 @@ impl MockFs {
                     "name": "Megan Whalen Turner"
                 }
             ],
+            "category": {
+                "name": category
+            },
             "consumableId": "137093",
             "description": "Storytel integration test description",
             "formats": [
@@ -283,6 +300,7 @@ impl MockFs {
                 }
             ],
             "isAbridged": false,
+            "kidsBook": false,
             "language": "en",
             "narrators": [
                 {
@@ -310,7 +328,7 @@ impl MockFs {
                 "series_order": 2.0,
                 "isbn": "9780062693839",
                 "publisher": "Greenwillow Books",
-                "genres": ["Audiobook", "Teens & Young Adult"]
+                "genres": ["Audiobook", category]
             });
             std::fs::write(
                 folder_path.join("metadata.json"),
