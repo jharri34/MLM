@@ -130,6 +130,23 @@ async fn link_folder(
             update_errored_torrent(db, ErroredTorrentId::Linker(id), title, result).await;
             return Ok(());
         }
+        if let Some(storytel_meta) = parse_storytel_meta(&json) {
+            trace!("Linking storytel folder");
+            let id = storytel_torrent_id(&storytel_meta.consumable_id);
+            let title = storytel_meta.title.clone();
+            let result = link_storytel_folder(
+                config,
+                library,
+                db,
+                storytel_meta,
+                audio_files,
+                ebook_files,
+                events,
+            )
+            .await;
+            update_errored_torrent(db, ErroredTorrentId::Linker(id), title, result).await;
+            return Ok(());
+        }
     }
 
     warn!(
@@ -173,6 +190,29 @@ async fn link_nextory_folder(
     events: &crate::stats::Events,
 ) -> Result<()> {
     let torrent = build_nextory_torrent(library, nextory_meta, &audio_files, &ebook_files).await?;
+    link_prepared_folder_torrent(
+        config,
+        library,
+        db,
+        torrent,
+        audio_files,
+        ebook_files,
+        events,
+    )
+    .await
+}
+
+async fn link_storytel_folder(
+    config: &Config,
+    library: &Library,
+    db: &Database<'_>,
+    storytel_meta: StorytelRaw,
+    audio_files: Vec<DirEntry>,
+    ebook_files: Vec<DirEntry>,
+    events: &crate::stats::Events,
+) -> Result<()> {
+    let torrent =
+        build_storytel_torrent(library, storytel_meta, &audio_files, &ebook_files).await?;
     link_prepared_folder_torrent(
         config,
         library,
@@ -323,7 +363,7 @@ async fn build_nextory_torrent(
         main_cat: None,
         categories: vec![],
         tags: vec![],
-        language: parse_nextory_language(&nextory_meta.language),
+        language: parse_folder_language(&nextory_meta.language),
         flags: None,
         filetypes,
         num_files: audio_files.len() as u64,
@@ -340,6 +380,89 @@ async fn build_nextory_torrent(
     build_torrent(
         library,
         nextory_torrent_id(nextory_meta.id),
+        clean_meta(meta, "")?,
+    )
+}
+
+async fn build_storytel_torrent(
+    library: &Library,
+    storytel_meta: StorytelRaw,
+    audio_files: &[DirEntry],
+    ebook_files: &[DirEntry],
+) -> Result<Torrent> {
+    let StorytelRaw {
+        consumable_id,
+        title,
+        description,
+        language,
+        is_abridged,
+        authors,
+        narrators,
+        series_info,
+        formats,
+    } = storytel_meta;
+
+    let mut series = vec![];
+    if let Some(raw_series) = series_info
+        && !raw_series.name.is_empty()
+    {
+        let sequence = raw_series
+            .order_in_series
+            .map(|order| order.to_string())
+            .unwrap_or_default();
+        if let Ok(parsed) = Series::try_from((raw_series.name, sequence)) {
+            series.push(parsed);
+        }
+    }
+    if series.is_empty()
+        && let Some((name, num)) = parse_series_from_title(&title)
+    {
+        series.push(Series {
+            name: name.to_string(),
+            entries: SeriesEntries::new(num.into_iter().map(SeriesEntry::Num).collect()),
+        });
+    }
+
+    let mut ids = BTreeMap::new();
+    ids.insert(ids::STORYTEL.to_string(), consumable_id.clone());
+    if let Some(isbn) = storytel_isbn(&formats) {
+        ids.insert(ids::ISBN.to_string(), isbn);
+    }
+
+    let mut flags = Flags::default();
+    if is_abridged {
+        flags.abridged = Some(true);
+    }
+
+    let (size, filetypes) = folder_file_stats(audio_files, ebook_files).await?;
+    let meta = TorrentMeta {
+        ids,
+        vip_status: None,
+        cat: None,
+        media_type: MediaType::Audiobook,
+        main_cat: None,
+        categories: vec![],
+        tags: vec![],
+        language: parse_folder_language(&language),
+        flags: Some(FlagBits::new(flags.as_bitfield())),
+        filetypes,
+        num_files: audio_files.len() as u64,
+        size: Size::from_bytes(size),
+        title,
+        edition: None,
+        description,
+        authors: authors.into_iter().map(|author| author.name).collect(),
+        narrators: narrators
+            .into_iter()
+            .map(|narrator| narrator.name)
+            .collect(),
+        series,
+        source: MetadataSource::File,
+        uploaded_at: None,
+    };
+    build_torrent(
+        library,
+        storytel_torrent_id(&consumable_id),
         clean_meta(meta, "")?,
     )
 }
@@ -521,6 +644,13 @@ fn parse_nextory_meta(json: &str) -> Option<NextoryRaw> {
     serde_json::from_str::<NextoryRaw>(json).ok()
 }
 
+fn parse_storytel_meta(json: &str) -> Option<StorytelRaw> {
+    if let Ok(meta) = serde_json::from_str::<StorytelWrapped>(json) {
+        return Some(meta.raw);
+    }
+    serde_json::from_str::<StorytelRaw>(json).ok()
+}
+
 fn parse_libation_series_subtitle(subtitle: &str) -> Option<(String, String)> {
     let subtitle = subtitle.trim();
     if subtitle.is_empty() {
@@ -556,6 +686,10 @@ fn nextory_torrent_id(nextory_id: u64) -> String {
     format!("nextory_{nextory_id}")
 }
 
+fn storytel_torrent_id(storytel_id: &str) -> String {
+    format!("storytel_{storytel_id}")
+}
+
 fn nextory_isbn(formats: &[NextoryFormat]) -> Option<String> {
     formats
         .iter()
@@ -564,7 +698,15 @@ fn nextory_isbn(formats: &[NextoryFormat]) -> Option<String> {
         .and_then(|f| f.isbn.clone())
 }
 
-fn parse_nextory_language(value: &str) -> Option<Language> {
+fn storytel_isbn(formats: &[StorytelFormat]) -> Option<String> {
+    formats
+        .iter()
+        .find(|f| f.format_type == "abook")
+        .or_else(|| formats.first())
+        .and_then(|f| f.isbn.clone())
+}
+
+fn parse_folder_language(value: &str) -> Option<Language> {
     if let Ok(language) = Language::from_str(value) {
         return Some(language);
     }
@@ -630,6 +772,11 @@ pub struct NextoryWrapped {
 }
 
 #[derive(Default, Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct StorytelWrapped {
+    pub raw: StorytelRaw,
+}
+
+#[derive(Default, Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct NextoryRaw {
     pub id: u64,
     pub title: String,
@@ -666,4 +813,46 @@ pub struct NextoryFormat {
 #[derive(Default, Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct NextoryName {
     pub name: String,
+}
+
+#[derive(Default, Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct StorytelRaw {
+    pub consumable_id: String,
+    pub title: String,
+    #[serde(default)]
+    pub description: String,
+    #[serde(default)]
+    pub language: String,
+    #[serde(default)]
+    pub is_abridged: bool,
+    #[serde(default)]
+    pub authors: Vec<StorytelName>,
+    #[serde(default)]
+    pub narrators: Vec<StorytelName>,
+    #[serde(default)]
+    pub series_info: Option<StorytelSeriesInfo>,
+    #[serde(default)]
+    pub formats: Vec<StorytelFormat>,
+}
+
+#[derive(Default, Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct StorytelName {
+    pub name: String,
+}
+
+#[derive(Default, Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct StorytelSeriesInfo {
+    pub name: String,
+    #[serde(default)]
+    pub order_in_series: Option<f64>,
+}
+
+#[derive(Default, Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct StorytelFormat {
+    #[serde(rename = "type")]
+    pub format_type: String,
+    #[serde(default)]
+    pub isbn: Option<String>,
 }

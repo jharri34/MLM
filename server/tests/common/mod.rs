@@ -256,6 +256,78 @@ impl MockFs {
 
         Ok(folder_path)
     }
+
+    #[allow(dead_code)]
+    pub fn create_storytel_folder(
+        &self,
+        folder_name: &str,
+        include_wrapped: bool,
+    ) -> Result<PathBuf> {
+        let folder_path = self.rip_dir.join(folder_name);
+        std::fs::create_dir_all(&folder_path)?;
+
+        let raw_meta = serde_json::json!({
+            "authors": [
+                {
+                    "id": "49365",
+                    "name": "Megan Whalen Turner"
+                }
+            ],
+            "consumableId": "137093",
+            "description": "Storytel integration test description",
+            "formats": [
+                {
+                    "id": "137093",
+                    "isbn": "9780062693839",
+                    "type": "abook"
+                }
+            ],
+            "isAbridged": false,
+            "language": "en",
+            "narrators": [
+                {
+                    "id": "4813",
+                    "name": "Steve West"
+                }
+            ],
+            "seriesInfo": {
+                "id": "25419",
+                "name": "The Queen's Thief",
+                "orderInSeries": 2
+            },
+            "title": "The Queen of Attolia"
+        });
+
+        if include_wrapped {
+            let wrapped_meta = serde_json::json!({
+                "raw": raw_meta.clone(),
+                "title": "The Queen of Attolia",
+                "authors": ["Megan Whalen Turner"],
+                "narrators": ["Steve West"],
+                "description": "Storytel integration test description",
+                "language": "en",
+                "series": "The Queen's Thief",
+                "series_order": 2.0,
+                "isbn": "9780062693839",
+                "publisher": "Greenwillow Books",
+                "genres": ["Audiobook", "Teens & Young Adult"]
+            });
+            std::fs::write(
+                folder_path.join("metadata.json"),
+                serde_json::to_string(&wrapped_meta)?,
+            )?;
+        }
+
+        std::fs::write(
+            folder_path.join("metadata_raw.json"),
+            serde_json::to_string(&raw_meta)?,
+        )?;
+
+        let audio_path = folder_path.join("The Queen of Attolia - Megan Whalen Turner.mp3");
+        std::fs::write(audio_path, "fake storytel audio data")?;
+
+        Ok(folder_path)
+    }
 }
 
 pub fn mock_config(rip_dir: PathBuf, library_dir: PathBuf) -> Config {

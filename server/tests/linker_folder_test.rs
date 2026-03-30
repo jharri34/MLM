@@ -435,6 +435,81 @@ async fn test_link_folders_to_library_nextory_raw_metadata() -> anyhow::Result<(
 }
 
 #[tokio::test]
+async fn test_link_folders_to_library_storytel_wrapped_metadata() -> anyhow::Result<()> {
+    let test_db = TestDb::new()?;
+    let mock_fs = MockFs::new()?;
+    let config = Arc::new(mock_config(
+        mock_fs.rip_dir.clone(),
+        mock_fs.library_dir.clone(),
+    ));
+
+    mock_fs.create_storytel_folder("storytel_wrapped", true)?;
+
+    link_folders_to_library(config.clone(), test_db.db.clone(), &Events::new()).await?;
+
+    let r = test_db.db.r_transaction()?;
+    let torrent: Option<Torrent> = r.get().primary("storytel_137093".to_string())?;
+    assert!(torrent.is_some());
+    let torrent = torrent.unwrap();
+    assert_eq!(torrent.meta.title, "The Queen of Attolia");
+    assert_eq!(torrent.meta.authors, vec!["Megan Whalen Turner"]);
+    assert_eq!(torrent.meta.narrators, vec!["Steve West"]);
+    assert_eq!(
+        torrent.meta.ids.get(mlm_db::ids::STORYTEL),
+        Some(&"137093".to_string())
+    );
+    assert_eq!(
+        torrent.meta.ids.get(mlm_db::ids::ISBN),
+        Some(&"9780062693839".to_string())
+    );
+    assert_eq!(torrent.meta.language, Some(mlm_db::Language::English));
+    assert_eq!(torrent.meta.series.len(), 1);
+    assert_eq!(torrent.meta.series[0].name, "The Queen's Thief");
+    assert_eq!(torrent.meta.series[0].entries.to_string(), "2");
+    assert!(torrent.library_path.is_some());
+
+    let expected_dir = mock_fs
+        .library_dir
+        .join("Megan Whalen Turner")
+        .join("The Queen's Thief")
+        .join("The Queen's Thief #2 - The Queen of Attolia {Steve West}");
+    assert!(expected_dir.exists());
+    assert!(
+        expected_dir
+            .join("The Queen of Attolia - Megan Whalen Turner.mp3")
+            .exists()
+    );
+    assert!(expected_dir.join("metadata.json").exists());
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_link_folders_to_library_storytel_raw_metadata() -> anyhow::Result<()> {
+    let test_db = TestDb::new()?;
+    let mock_fs = MockFs::new()?;
+    let config = Arc::new(mock_config(
+        mock_fs.rip_dir.clone(),
+        mock_fs.library_dir.clone(),
+    ));
+
+    mock_fs.create_storytel_folder("storytel_raw_only", false)?;
+
+    link_folders_to_library(config.clone(), test_db.db.clone(), &Events::new()).await?;
+
+    let r = test_db.db.r_transaction()?;
+    let torrent: Option<Torrent> = r.get().primary("storytel_137093".to_string())?;
+    assert!(torrent.is_some());
+    let torrent = torrent.unwrap();
+    assert_eq!(torrent.meta.title, "The Queen of Attolia");
+    assert_eq!(torrent.meta.authors, vec!["Megan Whalen Turner"]);
+    assert_eq!(torrent.selected_audio_format, Some(".mp3".to_string()));
+    assert!(torrent.library_path.is_some());
+
+    Ok(())
+}
+
+#[tokio::test]
 async fn test_link_folders_to_library_libation_series_subtitle_does_not_overwrite_book_title()
 -> anyhow::Result<()> {
     let test_db = TestDb::new()?;

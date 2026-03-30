@@ -301,4 +301,5 @@ pub mod ids {
     pub const ISBN: &str = "isbn";
     pub const MAM: &str = "mam";
     pub const NEXTORY: &str = "nextory";
+    pub const STORYTEL: &str = "storytel";
 }
