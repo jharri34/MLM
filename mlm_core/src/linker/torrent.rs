@@ -1,7 +1,7 @@
 #[cfg(target_family = "windows")]
 use std::os::windows::fs::MetadataExt as _;
 use std::{
-    fs::File,
+    fs::{self, File},
     io::{BufWriter, Write},
     mem,
     ops::Deref,
@@ -9,7 +9,7 @@ use std::{
     sync::Arc,
 };
 
-use anyhow::{Context, Result, bail};
+use anyhow::{Context, Result, anyhow, bail};
 use log::error;
 use mlm_db::{
     ClientStatus, DatabaseExt as _, ErroredTorrentId, Event, EventType, LibraryMismatch,
@@ -58,7 +58,7 @@ impl<T: MaMApi + ?Sized> MaMApi for Arc<T> {
 }
 use regex::Regex;
 use tokio::fs::create_dir_all;
-use tracing::{Level, debug, instrument, span, trace};
+use tracing::{Level, debug, instrument, span, trace, warn};
 
 use crate::{
     Events,
@@ -159,6 +159,25 @@ pub fn calculate_link_plans(
 pub struct TorrentUpdate {
     pub changed: bool,
     pub events: Vec<Event>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct InteractiveRelinkSuccess {
+    pub id: String,
+    pub title: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct InteractiveRelinkFailure {
+    pub id: String,
+    pub title: String,
+    pub error: String,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct InteractiveRelinkResult {
+    pub succeeded: Vec<InteractiveRelinkSuccess>,
+    pub failed: Vec<InteractiveRelinkFailure>,
 }
 
 pub fn check_torrent_updates(
@@ -592,6 +611,51 @@ pub async fn relink(
 }
 
 #[instrument(skip_all)]
+pub async fn relink_many(
+    config: &Config,
+    db: &Database<'_>,
+    hashes: Vec<String>,
+    events: &Events,
+) -> Result<InteractiveRelinkResult> {
+    let mut result = InteractiveRelinkResult::default();
+
+    for hash in hashes {
+        let title = torrent_title_for_summary(db, &hash);
+        match relink(config, db, hash.clone(), events).await {
+            Ok(()) => {
+                update_errored_torrent(
+                    db,
+                    ErroredTorrentId::Linker(hash.clone()),
+                    title.clone(),
+                    Ok(()),
+                )
+                .await;
+                result
+                    .succeeded
+                    .push(InteractiveRelinkSuccess { id: hash, title });
+            }
+            Err(err) => {
+                let error = format!("{err:#}");
+                update_errored_torrent(
+                    db,
+                    ErroredTorrentId::Linker(hash.clone()),
+                    title.clone(),
+                    Err(err),
+                )
+                .await;
+                result.failed.push(InteractiveRelinkFailure {
+                    id: hash,
+                    title,
+                    error,
+                });
+            }
+        }
+    }
+
+    Ok(result)
+}
+
+#[instrument(skip_all)]
 pub async fn relink_internal<Q>(
     config: &Config,
     qbit_config: &QbitConfig,
@@ -619,30 +683,22 @@ where
     let Some(torrent) = db.r_transaction()?.get().primary::<Torrent>(hash.clone())? else {
         bail!("Could not find torrent");
     };
-    let library_path_changed = torrent.library_path
-        != library_dir(
-            config.exclude_narrator_in_library_dir,
-            library,
-            &torrent.meta,
-        );
-    remove_library_files(config, &torrent, library_path_changed).await?;
-    link_torrent(
+
+    relink_existing_torrent(
         config,
         qbit_config,
         db,
-        &hash,
+        library,
         &qbit_torrent,
+        hash.clone(),
         files,
         selected_audio_format,
         selected_ebook_format,
-        library,
-        Some(&torrent),
-        &torrent.meta,
+        torrent,
         events,
     )
     .await
-    .context("link_torrent")
-    .map_err(|err| anyhow::Error::new(TorrentMetaError(torrent.meta, err)))
+    .map_err(|err| anyhow::Error::new(TorrentMetaError(err.meta, err.error)))
 }
 
 #[instrument(skip_all)]
@@ -702,6 +758,55 @@ where
 }
 
 #[instrument(skip_all)]
+pub async fn refresh_metadata_relink_many<M>(
+    config: &Config,
+    db: &Database<'_>,
+    mam: &M,
+    hashes: Vec<String>,
+    events: &Events,
+) -> Result<InteractiveRelinkResult>
+where
+    M: MaMApi + ?Sized,
+{
+    let mut result = InteractiveRelinkResult::default();
+
+    for hash in hashes {
+        let title = torrent_title_for_summary(db, &hash);
+        match refresh_metadata_relink(config, db, mam, hash.clone(), events).await {
+            Ok(()) => {
+                update_errored_torrent(
+                    db,
+                    ErroredTorrentId::Linker(hash.clone()),
+                    title.clone(),
+                    Ok(()),
+                )
+                .await;
+                result
+                    .succeeded
+                    .push(InteractiveRelinkSuccess { id: hash, title });
+            }
+            Err(err) => {
+                let error = format!("{err:#}");
+                update_errored_torrent(
+                    db,
+                    ErroredTorrentId::Linker(hash.clone()),
+                    title.clone(),
+                    Err(err),
+                )
+                .await;
+                result.failed.push(InteractiveRelinkFailure {
+                    id: hash,
+                    title,
+                    error,
+                });
+            }
+        }
+    }
+
+    Ok(result)
+}
+
+#[instrument(skip_all)]
 #[allow(clippy::too_many_arguments)]
 pub async fn refresh_metadata_relink_internal<Q, M>(
     config: &Config,
@@ -731,30 +836,22 @@ where
     }
     let (torrent, _mam_torrent) =
         refresh_mam_metadata(config, db, mam, hash.clone(), events).await?;
-    let library_path_changed = torrent.library_path
-        != library_dir(
-            config.exclude_narrator_in_library_dir,
-            library,
-            &torrent.meta,
-        );
-    remove_library_files(config, &torrent, library_path_changed).await?;
-    link_torrent(
+
+    relink_existing_torrent(
         config,
         qbit_config,
         db,
-        &hash,
+        library,
         &qbit_torrent,
+        hash,
         files,
         selected_audio_format,
         selected_ebook_format,
-        library,
-        Some(&torrent),
-        &torrent.meta,
+        torrent,
         events,
     )
     .await
-    .context("link_torrent")
-    .map_err(|err| anyhow::Error::new(TorrentMetaError(torrent.meta, err)))
+    .map_err(|err| anyhow::Error::new(TorrentMetaError(err.meta, err.error)))
 }
 
 #[instrument(skip_all)]
@@ -775,14 +872,7 @@ async fn link_torrent(
 ) -> Result<()> {
     let mut library_files = vec![];
 
-    let library_path = if library.options().method != LibraryLinkMethod::NoLink {
-        let Some(mut dir) = library_dir(config.exclude_narrator_in_library_dir, library, meta)
-        else {
-            bail!("Torrent has no author");
-        };
-        if config.exclude_narrator_in_library_dir && !meta.narrators.is_empty() && dir.exists() {
-            dir = library_dir(false, library, meta).unwrap();
-        }
+    let library_path = if let Some(dir) = resolve_link_library_dir(config, library, meta)? {
         let metadata = abs::create_metadata(meta);
 
         create_dir_all(&dir).await?;
@@ -898,6 +988,186 @@ async fn link_torrent(
     }
 
     Ok(())
+}
+
+#[derive(Debug)]
+struct RelinkError {
+    meta: TorrentMeta,
+    error: anyhow::Error,
+}
+
+#[instrument(skip_all)]
+#[allow(clippy::too_many_arguments)]
+async fn relink_existing_torrent(
+    config: &Config,
+    qbit_config: &QbitConfig,
+    db: &Database<'_>,
+    library: &Library,
+    qbit_torrent: &QbitTorrent,
+    hash: String,
+    files: Vec<TorrentContent>,
+    selected_audio_format: Option<String>,
+    selected_ebook_format: Option<String>,
+    torrent: Torrent,
+    events: &Events,
+) -> Result<(), RelinkError> {
+    let meta = torrent.meta.clone();
+    let library_path_changed = torrent.library_path
+        != library_dir(
+            config.exclude_narrator_in_library_dir,
+            library,
+            &torrent.meta,
+        );
+    remove_library_files(config, &torrent, library_path_changed)
+        .await
+        .map_err(|error| RelinkError {
+            meta: meta.clone(),
+            error: error.context("removing previous library files"),
+        })?;
+
+    let target_library_path =
+        resolve_link_library_dir(config, library, &meta).map_err(|error| RelinkError {
+            meta: meta.clone(),
+            error,
+        })?;
+    let plans = target_library_path
+        .as_ref()
+        .map(|dir| {
+            calculate_link_plans(
+                qbit_config,
+                qbit_torrent,
+                &files,
+                selected_audio_format.as_deref(),
+                selected_ebook_format.as_deref(),
+                dir,
+            )
+        })
+        .unwrap_or_default();
+
+    match link_torrent(
+        config,
+        qbit_config,
+        db,
+        &hash,
+        qbit_torrent,
+        files,
+        selected_audio_format,
+        selected_ebook_format,
+        library,
+        Some(&torrent),
+        &meta,
+        events,
+    )
+    .await
+    .context("link_torrent")
+    {
+        Ok(()) => Ok(()),
+        Err(error) => {
+            rollback_failed_relink(db, &hash, target_library_path.as_deref(), &plans).await;
+            Err(RelinkError { meta, error })
+        }
+    }
+}
+
+fn resolve_link_library_dir(
+    config: &Config,
+    library: &Library,
+    meta: &TorrentMeta,
+) -> Result<Option<PathBuf>> {
+    if library.options().method == LibraryLinkMethod::NoLink {
+        return Ok(None);
+    }
+
+    let Some(mut dir) = library_dir(config.exclude_narrator_in_library_dir, library, meta) else {
+        bail!("Torrent has no author");
+    };
+    if config.exclude_narrator_in_library_dir && !meta.narrators.is_empty() && dir.exists() {
+        dir = library_dir(false, library, meta).ok_or_else(|| anyhow!("Torrent has no author"))?;
+    }
+
+    Ok(Some(dir))
+}
+
+async fn rollback_failed_relink(
+    db: &Database<'_>,
+    hash: &str,
+    library_path: Option<&Path>,
+    plans: &[FileLinkPlan],
+) {
+    if let Some(library_path) = library_path
+        && let Err(err) = cleanup_partial_link_outputs(library_path, plans)
+    {
+        warn!("Failed cleaning up partial relink output for torrent {hash}: {err:#}");
+    }
+
+    if let Err(err) = clear_torrent_link_state(db, hash).await {
+        warn!("Failed clearing link state for torrent {hash}: {err:#}");
+    }
+}
+
+fn cleanup_partial_link_outputs(library_path: &Path, plans: &[FileLinkPlan]) -> Result<()> {
+    for plan in plans {
+        fs::remove_file(&plan.library_path).or_else(ignore_not_found)?;
+        remove_empty_parent_dirs(&plan.library_path, library_path)?;
+    }
+
+    fs::remove_file(library_path.join("metadata.json")).or_else(ignore_not_found)?;
+    fs::remove_file(library_path.join("cover.jpg")).or_else(ignore_not_found)?;
+    fs::remove_dir(library_path).or_else(ignore_not_found)?;
+
+    Ok(())
+}
+
+fn remove_empty_parent_dirs(path: &Path, stop_at: &Path) -> Result<()> {
+    let mut current = path.parent();
+    while let Some(dir) = current {
+        if dir == stop_at {
+            break;
+        }
+        match fs::remove_dir(dir) {
+            Ok(()) => current = dir.parent(),
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => current = dir.parent(),
+            Err(err) if err.kind() == std::io::ErrorKind::DirectoryNotEmpty => break,
+            Err(err) => return Err(err.into()),
+        }
+    }
+    Ok(())
+}
+
+fn ignore_not_found(err: std::io::Error) -> Result<(), std::io::Error> {
+    if err.kind() == std::io::ErrorKind::NotFound {
+        Ok(())
+    } else {
+        Err(err)
+    }
+}
+
+async fn clear_torrent_link_state(db: &Database<'_>, hash: &str) -> Result<()> {
+    let Some(mut torrent) = db
+        .r_transaction()?
+        .get()
+        .primary::<Torrent>(hash.to_string())?
+    else {
+        return Ok(());
+    };
+
+    torrent.library_path = None;
+    torrent.library_files.clear();
+    torrent.linker = None;
+    torrent.library_mismatch = None;
+
+    let (_guard, rw) = db.rw_async().await?;
+    rw.upsert(torrent)?;
+    rw.commit()?;
+    Ok(())
+}
+
+fn torrent_title_for_summary(db: &Database<'_>, hash: &str) -> String {
+    db.r_transaction()
+        .ok()
+        .and_then(|r| r.get().primary::<Torrent>(hash.to_string()).ok().flatten())
+        .map(|torrent| torrent.meta.title)
+        .unwrap_or_else(|| hash.to_string())
 }
 
 // map_path provided by crate::linker::common::map_path

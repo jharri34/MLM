@@ -64,14 +64,63 @@ impl TorrentsBulkAction {
         }
     }
 
-    pub(crate) fn success_label(self) -> &'static str {
+    fn completed_label(self) -> &'static str {
         match self {
-            Self::Refresh => "Refreshed metadata",
-            Self::Relink => "Relinked torrents",
+            Self::Refresh => "Refreshed metadata for",
+            Self::Relink => "Relinked",
             Self::RefreshRelink => "Refreshed metadata and relinked",
-            Self::Clean => "Cleaned torrents",
-            Self::Remove => "Removed torrents",
+            Self::Clean => "Cleaned",
+            Self::Remove => "Removed",
         }
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct TorrentsBulkActionFailure {
+    pub id: String,
+    pub title: String,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, Default, PartialEq, Eq)]
+pub struct TorrentsBulkActionResult {
+    pub succeeded_count: usize,
+    pub failed: Vec<TorrentsBulkActionFailure>,
+}
+
+impl TorrentsBulkActionResult {
+    pub(crate) fn all_failed(&self) -> bool {
+        self.succeeded_count == 0 && !self.failed.is_empty()
+    }
+
+    pub(crate) fn status_message(&self, action: TorrentsBulkAction) -> (String, bool) {
+        let mut message = format!(
+            "{} {}.",
+            action.completed_label(),
+            torrent_count_label(self.succeeded_count)
+        );
+
+        if !self.failed.is_empty() {
+            let failed_titles = self
+                .failed
+                .iter()
+                .map(|failure| failure.title.as_str())
+                .collect::<Vec<_>>()
+                .join(", ");
+            message.push_str(&format!(
+                " {} failed: {}.",
+                torrent_count_label(self.failed.len()),
+                failed_titles
+            ));
+        }
+
+        (message, self.all_failed())
+    }
+}
+
+fn torrent_count_label(count: usize) -> String {
+    match count {
+        1 => "1 torrent".to_string(),
+        n => format!("{n} torrents"),
     }
 }
 
@@ -229,4 +278,48 @@ pub struct TorrentsData {
     pub from: usize,
     pub page_size: usize,
     pub abs_url: Option<String>,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{TorrentsBulkAction, TorrentsBulkActionFailure, TorrentsBulkActionResult};
+
+    #[test]
+    fn bulk_action_result_formats_partial_success() {
+        let result = TorrentsBulkActionResult {
+            succeeded_count: 1,
+            failed: vec![TorrentsBulkActionFailure {
+                id: "torrent-032".to_string(),
+                title: "Test Book 032".to_string(),
+            }],
+        };
+
+        assert_eq!(
+            result.status_message(TorrentsBulkAction::Relink),
+            (
+                "Relinked 1 torrent. 1 torrent failed: Test Book 032.".to_string(),
+                false,
+            )
+        );
+    }
+
+    #[test]
+    fn bulk_action_result_marks_full_failure_as_error() {
+        let result = TorrentsBulkActionResult {
+            succeeded_count: 0,
+            failed: vec![TorrentsBulkActionFailure {
+                id: "torrent-033".to_string(),
+                title: "Test Book 033".to_string(),
+            }],
+        };
+
+        assert_eq!(
+            result.status_message(TorrentsBulkAction::RefreshRelink),
+            (
+                "Refreshed metadata and relinked 0 torrents. 1 torrent failed: Test Book 033."
+                    .to_string(),
+                true,
+            )
+        );
+    }
 }

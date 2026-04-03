@@ -1,4 +1,12 @@
 mam_id = ""
+exclude_narrator_in_library_dir = true
 
 [[qbittorrent]]
 url = "http://localhost:3997"
+path_mapping = { "/downloads" = "/Users/emma/Development-stirling/mlm/test/e2e-fixtures/downloads" }
+
+[[library]]
+name = "e2e"
+download_dir = "/downloads"
+library_dir = "/Users/emma/Development-stirling/mlm/test/e2e-fixtures/library"
+method = "copy"

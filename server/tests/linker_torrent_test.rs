@@ -537,6 +537,126 @@ async fn test_relink() -> anyhow::Result<()> {
 }
 
 #[tokio::test]
+async fn test_relink_failure_clears_link_state_and_partial_output() -> anyhow::Result<()> {
+    let db = TestDb::new()?;
+    let fs = MockFs::new()?;
+
+    let torrent_hash = "relink_failure_hash";
+    let torrent_name = "Relink Failure Torrent";
+    let torrent_dir = fs.rip_dir.join(torrent_name);
+    std::fs::create_dir_all(&torrent_dir)?;
+    std::fs::write(torrent_dir.join("disc-1.m4b"), "audio")?;
+
+    let mut config = mock_config(fs.rip_dir.clone(), fs.library_dir.clone());
+    let qbit_config = QbitConfig {
+        url: "".to_string(),
+        username: "".to_string(),
+        password: "".to_string(),
+        path_mapping: BTreeMap::new(),
+        on_cleaned: None,
+        on_invalid_torrent: None,
+    };
+    config.qbittorrent.push(qbit_config.clone());
+    config.libraries = vec![Library::ByDownloadDir(LibraryByDownloadDir {
+        download_dir: fs.rip_dir.clone(),
+        options: LibraryOptions {
+            name: Some("test".to_string()),
+            library_dir: fs.library_dir.clone(),
+            method: LibraryLinkMethod::Copy,
+            audio_types: None,
+            ebook_types: None,
+        },
+        tag_filters: LibraryTagFilters::default(),
+    })];
+    let config = Arc::new(config);
+    let events = mlm_core::Events::new();
+
+    let old_library_path = fs.library_dir.join("Old Author").join("Title");
+    std::fs::create_dir_all(&old_library_path)?;
+    std::fs::write(old_library_path.join("audio.m4b"), "old audio")?;
+
+    {
+        let (_guard, rw) = db.db.rw_async().await?;
+        rw.insert(mlm_db::Torrent {
+            id: torrent_hash.to_string(),
+            id_is_hash: true,
+            mam_id: Some(10),
+            library_path: Some(old_library_path.clone()),
+            library_files: vec![std::path::PathBuf::from("audio.m4b")],
+            linker: Some("test".to_string()),
+            category: None,
+            selected_audio_format: Some(".m4b".to_string()),
+            selected_ebook_format: None,
+            title_search: "title".to_string(),
+            meta: mlm_db::TorrentMeta {
+                ids: BTreeMap::from([(mlm_db::ids::MAM.to_string(), "10".to_string())]),
+                title: "Title".to_string(),
+                authors: vec!["New Author".to_string()],
+                media_type: mlm_db::MediaType::Audiobook,
+                source: mlm_db::MetadataSource::Mam,
+                uploaded_at: Some(mlm_db::Timestamp::now()),
+                ..Default::default()
+            },
+            created_at: mlm_db::Timestamp::now(),
+            replaced_with: None,
+            library_mismatch: Some(mlm_db::LibraryMismatch::NoLibrary),
+            client_status: None,
+        })?;
+        rw.commit()?;
+    }
+
+    let mock_qbit = MockQbit {
+        torrents: vec![],
+        files: HashMap::from([(
+            torrent_hash.to_string(),
+            vec![
+                TorrentContent {
+                    name: format!("{}/disc-1.m4b", torrent_name),
+                    ..Default::default()
+                },
+                TorrentContent {
+                    name: format!("{}/disc-2.m4b", torrent_name),
+                    ..Default::default()
+                },
+            ],
+        )]),
+    };
+
+    let qbit_torrent = QbitTorrent {
+        hash: torrent_hash.to_string(),
+        save_path: fs.rip_dir.to_string_lossy().to_string(),
+        ..Default::default()
+    };
+
+    let err = mlm_core::linker::torrent::relink_internal(
+        &config,
+        &qbit_config,
+        &db.db,
+        &mock_qbit,
+        qbit_torrent,
+        torrent_hash.to_string(),
+        &events,
+    )
+    .await
+    .unwrap_err();
+
+    assert!(format!("{err:#}").contains("disc-2.m4b"));
+    assert!(!old_library_path.exists());
+
+    let new_library_path = fs.library_dir.join("New Author").join("Title");
+    assert!(!new_library_path.exists());
+
+    let r = db.db.r_transaction()?;
+    let torrent: mlm_db::Torrent = r.get().primary(torrent_hash.to_string())?.unwrap();
+    assert_eq!(torrent.library_path, None);
+    assert!(torrent.library_files.is_empty());
+    assert_eq!(torrent.linker, None);
+    assert_eq!(torrent.library_mismatch, None);
+
+    Ok(())
+}
+
+#[tokio::test]
 async fn test_refresh_metadata_relink() -> anyhow::Result<()> {
     let db = TestDb::new()?;
     let fs = MockFs::new()?;

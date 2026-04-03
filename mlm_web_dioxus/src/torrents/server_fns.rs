@@ -6,7 +6,7 @@ use crate::error::IntoServerFnError;
 use mlm_core::{
     ContextExt, Torrent as DbTorrent, TorrentKey,
     cleaner::clean_torrent,
-    linker::{refresh_mam_metadata, refresh_metadata_relink, relink},
+    linker::{refresh_mam_metadata, refresh_metadata_relink_many, relink_many},
 };
 #[cfg(feature = "server")]
 use mlm_db::{
@@ -27,6 +27,8 @@ use super::types::{TorrentLibraryMismatch, TorrentsMeta, TorrentsRow};
 use super::types::{
     TorrentsBulkAction, TorrentsData, TorrentsPageColumns, TorrentsPageFilter, TorrentsPageSort,
 };
+#[cfg(feature = "server")]
+use super::types::{TorrentsBulkActionFailure, TorrentsBulkActionResult};
 
 #[server]
 pub async fn get_torrents_data(
@@ -263,7 +265,7 @@ pub async fn get_torrents_data(
 pub async fn apply_torrents_action(
     action: TorrentsBulkAction,
     torrent_ids: Vec<String>,
-) -> Result<(), ServerFnError> {
+) -> Result<TorrentsBulkActionResult, ServerFnError> {
     if torrent_ids.is_empty() {
         return Err(ServerFnError::new("No torrents selected"));
     }
@@ -273,6 +275,7 @@ pub async fn apply_torrents_action(
     match action {
         TorrentsBulkAction::Clean => {
             let config = context.config().await;
+            let succeeded_count = torrent_ids.len();
             for id in torrent_ids {
                 let Some(torrent) = context
                     .db()
@@ -288,36 +291,69 @@ pub async fn apply_torrents_action(
                     .await
                     .server_err_ctx(&format!("cleaning torrent {id}"))?;
             }
+            Ok(TorrentsBulkActionResult {
+                succeeded_count,
+                failed: vec![],
+            })
         }
         TorrentsBulkAction::Refresh => {
             let config = context.config().await;
             let mam = context
                 .mam()
                 .server_err_ctx("creating MaM client for refresh")?;
+            let succeeded_count = torrent_ids.len();
             for id in torrent_ids {
                 refresh_mam_metadata(&config, context.db(), &mam, id.clone(), &context.events)
                     .await
                     .server_err_ctx(&format!("refreshing torrent metadata for {id}"))?;
             }
+            Ok(TorrentsBulkActionResult {
+                succeeded_count,
+                failed: vec![],
+            })
         }
         TorrentsBulkAction::Relink => {
             let config = context.config().await;
-            for id in torrent_ids {
-                relink(&config, context.db(), id.clone(), &context.events)
-                    .await
-                    .server_err_ctx(&format!("relinking torrent {id}"))?;
-            }
+            let result = relink_many(&config, context.db(), torrent_ids, &context.events)
+                .await
+                .server_err_ctx("relinking torrents")?;
+            Ok(TorrentsBulkActionResult {
+                succeeded_count: result.succeeded.len(),
+                failed: result
+                    .failed
+                    .into_iter()
+                    .map(|failure| TorrentsBulkActionFailure {
+                        id: failure.id,
+                        title: failure.title,
+                    })
+                    .collect(),
+            })
         }
         TorrentsBulkAction::RefreshRelink => {
             let config = context.config().await;
             let mam = context
                 .mam()
                 .server_err_ctx("creating MaM client for refresh+relink")?;
-            for id in torrent_ids {
-                refresh_metadata_relink(&config, context.db(), &mam, id.clone(), &context.events)
-                    .await
-                    .server_err_ctx(&format!("refreshing torrent metadata and relinking {id}"))?;
-            }
+            let result = refresh_metadata_relink_many(
+                &config,
+                context.db(),
+                &mam,
+                torrent_ids,
+                &context.events,
+            )
+            .await
+            .server_err_ctx("refreshing torrent metadata and relinking torrents")?;
+            Ok(TorrentsBulkActionResult {
+                succeeded_count: result.succeeded.len(),
+                failed: result
+                    .failed
+                    .into_iter()
+                    .map(|failure| TorrentsBulkActionFailure {
+                        id: failure.id,
+                        title: failure.title,
+                    })
+                    .collect(),
+            })
         }
         TorrentsBulkAction::Remove => {
             let (_guard, rw) = context
@@ -325,6 +361,7 @@ pub async fn apply_torrents_action(
                 .rw_async()
                 .await
                 .server_err_ctx("opening write transaction for torrent removal")?;
+            let succeeded_count = torrent_ids.len();
             for id in torrent_ids {
                 let Some(torrent) = rw
                     .get()
@@ -337,10 +374,12 @@ pub async fn apply_torrents_action(
                     .server_err_ctx(&format!("removing torrent {id}"))?;
             }
             rw.commit().server_err_ctx("committing torrent removals")?;
+            Ok(TorrentsBulkActionResult {
+                succeeded_count,
+                failed: vec![],
+            })
         }
     }
-
-    Ok(())
 }
 
 #[cfg(feature = "server")]

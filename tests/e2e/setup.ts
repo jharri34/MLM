@@ -14,6 +14,7 @@ const SETUP_BIN = resolve(ROOT, 'target/release/create_test_db');
 const MOCK_BIN = resolve(ROOT, 'target/release/mock_server');
 const SERVER_URL = 'http://localhost:3998';
 const MOCK_URL = 'http://localhost:3997';
+const MISSING_SOURCE_IDS = new Set([32, 33, 34, 35]);
 
 function seedTorrentFiles() {
         rmSync(FIXTURES_ROOT, { recursive: true, force: true });
@@ -21,6 +22,9 @@ function seedTorrentFiles() {
         mkdirSync(LIBRARY_DIR, { recursive: true });
 
         for (let i = 1; i <= 35; i += 1) {
+                if (MISSING_SOURCE_IDS.has(i)) {
+                        continue;
+                }
                 const title = `Test Book ${String(i).padStart(3, '0')}`;
                 writeFileSync(resolve(DOWNLOADS_DIR, `${title}.m4b`), `fake audio ${title}\n`);
         }

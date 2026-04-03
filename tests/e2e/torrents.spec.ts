@@ -207,50 +207,90 @@ test.describe('Torrents page', () => {
                 await expect(page.locator('.error')).toHaveCount(0);
         });
 
-        test('bulk relink links an unlinked torrent', async ({ page, browserName }) => {
-                const torrentIndex = 26 + browserOffset(browserName);
-                const torrentId = torrentIdFor(torrentIndex);
-                const title = torrentTitleFor(torrentIndex);
-                const expectedPath = resolve(E2E_LIBRARY_DIR, torrentAuthorFor(torrentIndex), title);
+        test('bulk relink continues after a missing source file', async ({ page, browserName }) => {
+                const successIndex = 26 + browserOffset(browserName);
+                const failureIndex = 32 + browserOffset(browserName);
+                const successId = torrentIdFor(successIndex);
+                const successTitle = torrentTitleFor(successIndex);
+                const failureId = torrentIdFor(failureIndex);
+                const failureTitle = torrentTitleFor(failureIndex);
+                const expectedPath = resolve(
+                        E2E_LIBRARY_DIR,
+                        torrentAuthorFor(successIndex),
+                        successTitle
+                );
 
                 await page.goto('/torrents');
-                const row = page.locator('.torrents-grid-row').filter({ hasText: title }).first();
-                await expect(row).toBeVisible();
+                const successRow = page
+                        .locator('.torrents-grid-row')
+                        .filter({ hasText: successTitle })
+                        .first();
+                const failureRow = page
+                        .locator('.torrents-grid-row')
+                        .filter({ hasText: failureTitle })
+                        .first();
+                await expect(successRow).toBeVisible();
+                await expect(failureRow).toBeVisible();
 
-                await row.locator('input[type="checkbox"]').click();
+                await successRow.locator('input[type="checkbox"]').click();
+                await failureRow.locator('input[type="checkbox"]').click();
                 await page.getByRole('button', { name: 'relink', exact: true }).click();
-                await expect(page.locator('.status-message.success')).toContainText('Relinked torrents');
+                await expect(page.locator('.status-message.success')).toContainText(
+                        `Relinked 1 torrent. 1 torrent failed: ${failureTitle}.`
+                );
 
-                await page.goto(`/torrents/${torrentId}`);
+                await page.goto(`/torrents/${successId}`);
                 await expect(page.locator('.detail-library-path')).toContainText(expectedPath);
+
+                await page.goto(`/torrents/${failureId}`);
+                await expect(page.locator('.detail-library-path')).toContainText(
+                        'Not linked into the library.'
+                );
         });
 
-        test('bulk refresh metadata and relink refreshes metadata and links torrent', async ({
+        test('bulk refresh metadata and relink continues after a missing source file', async ({
                 page,
                 browserName,
         }) => {
-                const torrentIndex = 29 + browserOffset(browserName);
-                const title = torrentTitleFor(torrentIndex);
-                const torrentId = torrentIdFor(torrentIndex);
+                const successIndex = 29 + browserOffset(browserName);
+                const failureIndex = 33 + browserOffset(browserName);
+                const successTitle = torrentTitleFor(successIndex);
+                const successId = torrentIdFor(successIndex);
+                const failureId = torrentIdFor(failureIndex);
+                const failureTitle = torrentTitleFor(failureIndex);
                 const updatedTitle = 'Updated Mock Search Result Title';
                 const expectedLibraryRoot = resolve(E2E_LIBRARY_DIR, 'Updated Author Name');
 
                 await page.goto('/torrents');
-                const row = page.locator('.torrents-grid-row').filter({ hasText: title }).first();
-                await expect(row).toBeVisible();
+                const successRow = page
+                        .locator('.torrents-grid-row')
+                        .filter({ hasText: successTitle })
+                        .first();
+                const failureRow = page
+                        .locator('.torrents-grid-row')
+                        .filter({ hasText: failureTitle })
+                        .first();
+                await expect(successRow).toBeVisible();
+                await expect(failureRow).toBeVisible();
 
-                await row.locator('input[type="checkbox"]').click();
+                await successRow.locator('input[type="checkbox"]').click();
+                await failureRow.locator('input[type="checkbox"]').click();
                 await page
                         .getByRole('button', { name: 'refresh metadata and relink', exact: true })
                         .click();
                 await expect(page.locator('.status-message.success')).toContainText(
-                        'Refreshed metadata and relinked'
+                        `Refreshed metadata and relinked 1 torrent. 1 torrent failed: ${failureTitle}.`
                 );
                 await expect(page.locator('body')).toContainText(updatedTitle);
 
-                await page.goto(`/torrents/${torrentId}`);
+                await page.goto(`/torrents/${successId}`);
                 await expect(page.locator('body')).toContainText(updatedTitle);
                 await expect(page.locator('.detail-library-path')).toContainText(expectedLibraryRoot);
                 await expect(page.locator('.detail-library-path')).toContainText(updatedTitle);
+
+                await page.goto(`/torrents/${failureId}`);
+                await expect(page.locator('.detail-library-path')).toContainText(
+                        'Not linked into the library.'
+                );
         });
 });

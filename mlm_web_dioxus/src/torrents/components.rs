@@ -785,11 +785,10 @@ pub fn TorrentsPage() -> Element {
                                         status_msg.set(None);
                                         spawn(async move {
                                             match apply_torrents_action(action, ids).await {
-                                                Ok(_) => {
-                                                    status_msg.set(Some((
-                                                        action.success_label().to_string(),
-                                                        false,
-                                                    )));
+                                                Ok(result) => {
+                                                    status_msg.set(Some(
+                                                        result.status_message(action),
+                                                    ));
                                                     selected.set(BTreeSet::new());
                                                     if let Some(resource) =
                                                         torrents_data.as_mut()
