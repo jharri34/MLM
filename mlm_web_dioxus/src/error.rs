@@ -13,16 +13,16 @@ impl<T, E: std::fmt::Display> IntoServerFnError<T> for Result<T, E> {
     fn server_err(self) -> Result<T, ServerFnError> {
         self.map_err(|e| {
             #[cfg(feature = "server")]
-            tracing::error!("server function error: {e}");
-            ServerFnError::new(e.to_string())
+            tracing::error!("server function error: {e:#}");
+            ServerFnError::new(format!("{e:#}"))
         })
     }
 
     fn server_err_ctx(self, msg: &str) -> Result<T, ServerFnError> {
         self.map_err(|e| {
             #[cfg(feature = "server")]
-            tracing::error!("{msg}: {e}");
-            ServerFnError::new(format!("{}: {}", msg, e))
+            tracing::error!("{msg}: {e:#}");
+            ServerFnError::new(format!("{msg}: {e:#}"))
         })
     }
 }
@@ -50,4 +50,26 @@ pub fn get_context() -> Result<mlm_core::Context, ServerFnError> {
     FullstackContext::current()
         .and_then(|ctx| ctx.extension())
         .ok_or_server_err("Context not found")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::IntoServerFnError;
+
+    #[test]
+    fn server_err_ctx_preserves_anyhow_chain() {
+        let err = Err::<(), _>(
+            anyhow::anyhow!("root cause")
+                .context("inner context")
+                .context("outer context"),
+        )
+        .server_err_ctx("top level")
+        .unwrap_err();
+
+        let msg = err.to_string();
+        assert!(msg.contains("top level"));
+        assert!(msg.contains("outer context"));
+        assert!(msg.contains("inner context"));
+        assert!(msg.contains("root cause"));
+    }
 }

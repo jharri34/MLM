@@ -6,7 +6,7 @@ use crate::error::IntoServerFnError;
 use mlm_core::{
     ContextExt, Torrent as DbTorrent, TorrentKey,
     cleaner::clean_torrent,
-    linker::{refresh_mam_metadata, refresh_metadata_relink},
+    linker::{refresh_mam_metadata, refresh_metadata_relink, relink},
 };
 #[cfg(feature = "server")]
 use mlm_db::{
@@ -279,14 +279,14 @@ pub async fn apply_torrents_action(
                     .r_transaction()
                     .server_err_ctx("opening read transaction for clean action")?
                     .get()
-                    .primary::<DbTorrent>(id)
+                    .primary::<DbTorrent>(id.clone())
                     .server_err_ctx("loading torrent for clean action")?
                 else {
                     return Err(ServerFnError::new("Could not find torrent"));
                 };
                 clean_torrent(&config, context.db(), torrent, true, &context.events)
                     .await
-                    .server_err_ctx("cleaning torrent")?;
+                    .server_err_ctx(&format!("cleaning torrent {id}"))?;
             }
         }
         TorrentsBulkAction::Refresh => {
@@ -295,9 +295,17 @@ pub async fn apply_torrents_action(
                 .mam()
                 .server_err_ctx("creating MaM client for refresh")?;
             for id in torrent_ids {
-                refresh_mam_metadata(&config, context.db(), &mam, id, &context.events)
+                refresh_mam_metadata(&config, context.db(), &mam, id.clone(), &context.events)
                     .await
-                    .server_err_ctx("refreshing torrent metadata")?;
+                    .server_err_ctx(&format!("refreshing torrent metadata for {id}"))?;
+            }
+        }
+        TorrentsBulkAction::Relink => {
+            let config = context.config().await;
+            for id in torrent_ids {
+                relink(&config, context.db(), id.clone(), &context.events)
+                    .await
+                    .server_err_ctx(&format!("relinking torrent {id}"))?;
             }
         }
         TorrentsBulkAction::RefreshRelink => {
@@ -306,9 +314,9 @@ pub async fn apply_torrents_action(
                 .mam()
                 .server_err_ctx("creating MaM client for refresh+relink")?;
             for id in torrent_ids {
-                refresh_metadata_relink(&config, context.db(), &mam, id, &context.events)
+                refresh_metadata_relink(&config, context.db(), &mam, id.clone(), &context.events)
                     .await
-                    .server_err_ctx("refreshing torrent metadata and relinking")?;
+                    .server_err_ctx(&format!("refreshing torrent metadata and relinking {id}"))?;
             }
         }
         TorrentsBulkAction::Remove => {
@@ -320,12 +328,13 @@ pub async fn apply_torrents_action(
             for id in torrent_ids {
                 let Some(torrent) = rw
                     .get()
-                    .primary::<DbTorrent>(id)
+                    .primary::<DbTorrent>(id.clone())
                     .server_err_ctx("loading torrent for removal")?
                 else {
                     return Err(ServerFnError::new("Could not find torrent"));
                 };
-                rw.remove(torrent).server_err_ctx("removing torrent")?;
+                rw.remove(torrent)
+                    .server_err_ctx(&format!("removing torrent {id}"))?;
             }
             rw.commit().server_err_ctx("committing torrent removals")?;
         }

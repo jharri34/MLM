@@ -1,4 +1,41 @@
 import { test, expect } from '@playwright/test';
+import { resolve } from 'path';
+
+function browserOffset(browserName: string): number {
+        switch (browserName) {
+                case 'chromium':
+                        return 0;
+                case 'firefox':
+                        return 1;
+                case 'webkit':
+                        return 2;
+                default:
+                        return 0;
+        }
+}
+
+function torrentIdFor(index: number): string {
+        return `torrent-${String(index).padStart(3, '0')}`;
+}
+
+function torrentTitleFor(index: number): string {
+        return `Test Book ${String(index).padStart(3, '0')}`;
+}
+
+function torrentAuthorFor(index: number): string {
+        const authors = [
+                'Brandon Sanderson',
+                'Patrick Rothfuss',
+                'Robin Hobb',
+                'Terry Pratchett',
+                'N.K. Jemisin',
+                'Joe Abercrombie',
+                'Ursula K. Le Guin',
+        ];
+        return authors[(index - 1) % authors.length];
+}
+
+const E2E_LIBRARY_DIR = resolve(__dirname, '../..', 'test/e2e-fixtures/library');
 
 test.describe('Torrents page', () => {
         test('loads and shows torrent rows', async ({ page }) => {
@@ -168,5 +205,52 @@ test.describe('Torrents page', () => {
         test('no error state on initial load', async ({ page }) => {
                 await page.goto('/torrents');
                 await expect(page.locator('.error')).toHaveCount(0);
+        });
+
+        test('bulk relink links an unlinked torrent', async ({ page, browserName }) => {
+                const torrentIndex = 26 + browserOffset(browserName);
+                const torrentId = torrentIdFor(torrentIndex);
+                const title = torrentTitleFor(torrentIndex);
+                const expectedPath = resolve(E2E_LIBRARY_DIR, torrentAuthorFor(torrentIndex), title);
+
+                await page.goto('/torrents');
+                const row = page.locator('.torrents-grid-row').filter({ hasText: title }).first();
+                await expect(row).toBeVisible();
+
+                await row.locator('input[type="checkbox"]').click();
+                await page.getByRole('button', { name: 'relink', exact: true }).click();
+                await expect(page.locator('.status-message.success')).toContainText('Relinked torrents');
+
+                await page.goto(`/torrents/${torrentId}`);
+                await expect(page.locator('.detail-library-path')).toContainText(expectedPath);
+        });
+
+        test('bulk refresh metadata and relink refreshes metadata and links torrent', async ({
+                page,
+                browserName,
+        }) => {
+                const torrentIndex = 29 + browserOffset(browserName);
+                const title = torrentTitleFor(torrentIndex);
+                const torrentId = torrentIdFor(torrentIndex);
+                const updatedTitle = 'Updated Mock Search Result Title';
+                const expectedLibraryRoot = resolve(E2E_LIBRARY_DIR, 'Updated Author Name');
+
+                await page.goto('/torrents');
+                const row = page.locator('.torrents-grid-row').filter({ hasText: title }).first();
+                await expect(row).toBeVisible();
+
+                await row.locator('input[type="checkbox"]').click();
+                await page
+                        .getByRole('button', { name: 'refresh metadata and relink', exact: true })
+                        .click();
+                await expect(page.locator('.status-message.success')).toContainText(
+                        'Refreshed metadata and relinked'
+                );
+                await expect(page.locator('body')).toContainText(updatedTitle);
+
+                await page.goto(`/torrents/${torrentId}`);
+                await expect(page.locator('body')).toContainText(updatedTitle);
+                await expect(page.locator('.detail-library-path')).toContainText(expectedLibraryRoot);
+                await expect(page.locator('.detail-library-path')).toContainText(updatedTitle);
         });
 });

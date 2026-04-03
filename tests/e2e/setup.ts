@@ -1,16 +1,30 @@
 import { execSync, spawn } from 'child_process';
-import { mkdirSync, writeFileSync } from 'fs';
+import { mkdirSync, rmSync, writeFileSync } from 'fs';
 import { homedir } from 'os';
 import { resolve } from 'path';
 
 const ROOT = resolve(__dirname, '../..');
 const DB_PATH = resolve(ROOT, 'test/e2e.db');
 const CONFIG_PATH = resolve(ROOT, 'test/e2e-config.toml');
+const FIXTURES_ROOT = resolve(ROOT, 'test/e2e-fixtures');
+const DOWNLOADS_DIR = resolve(FIXTURES_ROOT, 'downloads');
+const LIBRARY_DIR = resolve(FIXTURES_ROOT, 'library');
 const SERVER_BIN = resolve(ROOT, 'target/release/mlm');
 const SETUP_BIN = resolve(ROOT, 'target/release/create_test_db');
 const MOCK_BIN = resolve(ROOT, 'target/release/mock_server');
 const SERVER_URL = 'http://localhost:3998';
 const MOCK_URL = 'http://localhost:3997';
+
+function seedTorrentFiles() {
+        rmSync(FIXTURES_ROOT, { recursive: true, force: true });
+        mkdirSync(DOWNLOADS_DIR, { recursive: true });
+        mkdirSync(LIBRARY_DIR, { recursive: true });
+
+        for (let i = 1; i <= 35; i += 1) {
+                const title = `Test Book ${String(i).padStart(3, '0')}`;
+                writeFileSync(resolve(DOWNLOADS_DIR, `${title}.m4b`), `fake audio ${title}\n`);
+        }
+}
 
 async function waitForUrl(url: string, timeoutMs = 15_000): Promise<void> {
         const deadline = Date.now() + timeoutMs;
@@ -43,9 +57,24 @@ export default async function globalSetup() {
         // (Re)create isolated test database
         console.log('[e2e] Creating test database...');
         mkdirSync(resolve(ROOT, 'test'), { recursive: true });
+        seedTorrentFiles();
         writeFileSync(
                 CONFIG_PATH,
-                ['mam_id = ""', '', '[[qbittorrent]]', `url = "${MOCK_URL}"`, ''].join('\n')
+                [
+                        'mam_id = ""',
+                        'exclude_narrator_in_library_dir = true',
+                        '',
+                        '[[qbittorrent]]',
+                        `url = "${MOCK_URL}"`,
+                        `path_mapping = { "/downloads" = "${DOWNLOADS_DIR}" }`,
+                        '',
+                        '[[library]]',
+                        'name = "e2e"',
+                        'download_dir = "/downloads"',
+                        `library_dir = "${LIBRARY_DIR}"`,
+                        'method = "copy"',
+                        '',
+                ].join('\n')
         );
         execSync(`"${SETUP_BIN}" "${DB_PATH}"`, { cwd: ROOT, stdio: 'inherit' });
 

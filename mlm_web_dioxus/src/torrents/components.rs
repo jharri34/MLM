@@ -757,6 +757,7 @@ pub fn TorrentsPage() -> Element {
                         style: if selected.read().is_empty() { "" } else { "display: flex" },
                         for action in [
                             TorrentsBulkAction::Refresh,
+                            TorrentsBulkAction::Relink,
                             TorrentsBulkAction::RefreshRelink,
                             TorrentsBulkAction::Clean,
                             TorrentsBulkAction::Remove,

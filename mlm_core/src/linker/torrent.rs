@@ -799,38 +799,53 @@ async fn link_torrent(
             let span = span!(Level::TRACE, "file", file = ?plan.relative_library_path);
             let _s = span.enter();
             if let Some(parent) = plan.library_path.parent() {
-                create_dir_all(parent).await?;
+                create_dir_all(parent)
+                    .await
+                    .with_context(|| format!("creating parent directory {}", parent.display()))?;
             }
             library_files.push(plan.relative_library_path.clone());
-            match library.options().method {
+            let link_result = match library.options().method {
                 LibraryLinkMethod::Hardlink => hard_link(
                     &plan.download_path,
                     &plan.library_path,
                     &plan.relative_library_path,
-                )?,
+                ),
                 LibraryLinkMethod::HardlinkOrCopy => hard_link(
                     &plan.download_path,
                     &plan.library_path,
                     &plan.relative_library_path,
                 )
-                .or_else(|_| copy(&plan.download_path, &plan.library_path))?,
-                LibraryLinkMethod::Copy => copy(&plan.download_path, &plan.library_path)?,
+                .or_else(|_| copy(&plan.download_path, &plan.library_path)),
+                LibraryLinkMethod::Copy => copy(&plan.download_path, &plan.library_path),
                 LibraryLinkMethod::HardlinkOrSymlink => hard_link(
                     &plan.download_path,
                     &plan.library_path,
                     &plan.relative_library_path,
                 )
-                .or_else(|_| symlink(&plan.download_path, &plan.library_path))?,
-                LibraryLinkMethod::Symlink => symlink(&plan.download_path, &plan.library_path)?,
-                LibraryLinkMethod::NoLink => {}
+                .or_else(|_| symlink(&plan.download_path, &plan.library_path)),
+                LibraryLinkMethod::Symlink => symlink(&plan.download_path, &plan.library_path),
+                LibraryLinkMethod::NoLink => Ok(()),
             };
+            link_result.with_context(|| {
+                format!(
+                    "linking file {:?} from {} to {}",
+                    plan.relative_library_path,
+                    plan.download_path.display(),
+                    plan.library_path.display()
+                )
+            })?;
         }
         library_files.sort();
 
-        let file = File::create(dir.join("metadata.json"))?;
+        let metadata_path = dir.join("metadata.json");
+        let file = File::create(&metadata_path)
+            .with_context(|| format!("creating {}", metadata_path.display()))?;
         let mut writer = BufWriter::new(file);
-        serde_json::to_writer(&mut writer, &metadata)?;
-        writer.flush()?;
+        serde_json::to_writer(&mut writer, &metadata)
+            .with_context(|| format!("writing {}", metadata_path.display()))?;
+        writer
+            .flush()
+            .with_context(|| format!("flushing {}", metadata_path.display()))?;
         Some(dir.clone())
     } else {
         None

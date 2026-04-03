@@ -47,6 +47,7 @@ pub enum TorrentsPageFilter {
 #[serde(rename_all = "snake_case")]
 pub enum TorrentsBulkAction {
     Refresh,
+    Relink,
     RefreshRelink,
     Clean,
     Remove,
@@ -56,6 +57,7 @@ impl TorrentsBulkAction {
     pub(crate) fn label(self) -> &'static str {
         match self {
             Self::Refresh => "refresh metadata",
+            Self::Relink => "relink",
             Self::RefreshRelink => "refresh metadata and relink",
             Self::Clean => "clean torrent",
             Self::Remove => "remove torrent from MLM",
@@ -65,6 +67,7 @@ impl TorrentsBulkAction {
     pub(crate) fn success_label(self) -> &'static str {
         match self {
             Self::Refresh => "Refreshed metadata",
+            Self::Relink => "Relinked torrents",
             Self::RefreshRelink => "Refreshed metadata and relinked",
             Self::Clean => "Cleaned torrents",
             Self::Remove => "Removed torrents",

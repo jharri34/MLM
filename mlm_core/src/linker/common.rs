@@ -10,7 +10,7 @@ use std::{
 };
 use tokio::fs::DirEntry;
 
-use anyhow::{Result, bail};
+use anyhow::{Context, Result, bail};
 use file_id::get_file_id;
 use mlm_db::Size;
 use tracing::{debug, trace};
@@ -143,20 +143,39 @@ pub fn hard_link(download_path: &Path, library_path: &Path, file_path: &Path) ->
                 }
             }
             Err(err.into())
+        }).with_context(|| {
+            format!(
+                "hard linking {} -> {} for {:?}",
+                download_path.display(),
+                library_path.display(),
+                file_path
+            )
         })?;
     Ok(())
 }
 
 pub fn copy(download_path: &Path, library_path: &Path) -> Result<()> {
     debug!("copying: {:?} -> {:?}", download_path, library_path);
-    fs::copy(download_path, library_path)?;
+    fs::copy(download_path, library_path).with_context(|| {
+        format!(
+            "copying {} -> {}",
+            download_path.display(),
+            library_path.display()
+        )
+    })?;
     Ok(())
 }
 
 pub fn symlink(download_path: &Path, library_path: &Path) -> Result<()> {
     debug!("symlinking: {:?} -> {:?}", download_path, library_path);
     #[cfg(target_family = "unix")]
-    std::os::unix::fs::symlink(download_path, library_path)?;
+    std::os::unix::fs::symlink(download_path, library_path).with_context(|| {
+        format!(
+            "symlinking {} -> {}",
+            download_path.display(),
+            library_path.display()
+        )
+    })?;
     #[cfg(target_family = "windows")]
     bail!("symlink is not supported on Windows");
     #[allow(unreachable_code)]

@@ -33,15 +33,24 @@ struct HashesQuery {
     hash: Option<String>,
 }
 
-async fn qbit_torrents_info(Query(q): Query<HashesQuery>) -> impl IntoResponse {
-    // Only return a torrent when the expected hash is requested.
-    let requested = q.hashes.as_deref().unwrap_or("");
-    if !requested.is_empty() && !requested.split('|').any(|h| h == "torrent-001") {
-        return Json(json!([]));
+fn parse_torrent_index(hash: &str) -> Option<usize> {
+    hash.strip_prefix("torrent-")?.parse().ok()
+}
+
+fn torrent_title(index: usize) -> String {
+    format!("Test Book {index:03}")
+}
+
+fn mock_qbit_torrent(hash: &str) -> Option<serde_json::Value> {
+    let index = parse_torrent_index(hash)?;
+    if !(1..=35).contains(&index) {
+        return None;
     }
-    Json(json!([{
-        "hash": "torrent-001",
-        "name": "Test Book 001",
+
+    let title = torrent_title(index);
+    Some(json!({
+        "hash": hash,
+        "name": title,
         "state": "stalledUP",
         "category": "Audiobooks",
         "tags": "mlm",
@@ -60,8 +69,8 @@ async fn qbit_torrents_info(Query(q): Query<HashesQuery>) -> impl IntoResponse {
         "added_on": 1700000000i64,
         "completion_on": 1700001000i64,
         "save_path": "/downloads/",
-        "content_path": "/downloads/Test Book 001",
-        "root_path": "/downloads/Test Book 001",
+        "content_path": format!("/downloads/{title}"),
+        "root_path": format!("/downloads/{title}"),
         "download_path": "",
         "amount_left": 0i64,
         "completed": 310000000i64,
@@ -97,12 +106,25 @@ async fn qbit_torrents_info(Query(q): Query<HashesQuery>) -> impl IntoResponse {
         "super_seeding": false,
         "private": true,
         "popularity": 1.0f64
-    }]))
+    }))
+}
+
+async fn qbit_torrents_info(Query(q): Query<HashesQuery>) -> impl IntoResponse {
+    let requested = q.hashes.as_deref().unwrap_or("");
+    let torrents = if requested.is_empty() {
+        vec![mock_qbit_torrent("torrent-001").unwrap()]
+    } else {
+        requested
+            .split('|')
+            .filter_map(mock_qbit_torrent)
+            .collect::<Vec<_>>()
+    };
+    Json(json!(torrents))
 }
 
 async fn qbit_trackers(Query(q): Query<HashesQuery>) -> impl IntoResponse {
     let hash = q.hash.as_deref().unwrap_or("");
-    if hash != "torrent-001" {
+    if mock_qbit_torrent(hash).is_none() {
         return (StatusCode::NOT_FOUND, Json(json!([])));
     }
     (
@@ -134,15 +156,19 @@ async fn qbit_trackers(Query(q): Query<HashesQuery>) -> impl IntoResponse {
 
 async fn qbit_files(Query(q): Query<HashesQuery>) -> impl IntoResponse {
     let hash = q.hash.as_deref().unwrap_or("");
-    if hash != "torrent-001" {
+    let Some(index) = parse_torrent_index(hash) else {
+        return (StatusCode::NOT_FOUND, Json(json!([])));
+    };
+    if !(1..=35).contains(&index) {
         return (StatusCode::NOT_FOUND, Json(json!([])));
     }
+    let title = torrent_title(index);
     (
         StatusCode::OK,
         Json(json!([
             {
                 "index": 0i64,
-                "name": "Test Book 001.m4b",
+                "name": format!("{title}.m4b"),
                 "size": 310000000i64,
                 "progress": 1.0f64,
                 "priority": 1,
