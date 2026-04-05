@@ -5,12 +5,25 @@ use crate::components::{
 
 use super::types::{SelectedPageColumns, SelectedPageFilter, SelectedPageSort};
 
-#[derive(Clone, Default)]
+#[derive(Clone)]
 pub struct PageQueryState {
     pub sort: Option<SelectedPageSort>,
     pub asc: bool,
     pub filters: Vec<(SelectedPageFilter, String)>,
+    pub from: usize,
     pub show: SelectedPageColumns,
+}
+
+impl Default for PageQueryState {
+    fn default() -> Self {
+        Self {
+            sort: None,
+            asc: false,
+            filters: Vec::new(),
+            from: 0,
+            show: SelectedPageColumns::default(),
+        }
+    }
 }
 
 pub fn parse_query_state() -> PageQueryState {
@@ -19,6 +32,11 @@ pub fn parse_query_state() -> PageQueryState {
         match key.as_str() {
             "sort_by" => state.sort = parse_query_enum::<SelectedPageSort>(&value),
             "asc" => state.asc = value == "true",
+            "from" => {
+                if let Ok(v) = value.parse::<usize>() {
+                    state.from = v;
+                }
+            }
             "show" => state.show = SelectedPageColumns::from_query_value(&value),
             _ => {
                 if let Some(field) = parse_query_enum::<SelectedPageFilter>(&key) {
@@ -34,6 +52,7 @@ pub fn build_query_url(
     sort: Option<SelectedPageSort>,
     asc: bool,
     filters: &[(SelectedPageFilter, String)],
+    from: usize,
     show: SelectedPageColumns,
 ) -> String {
     let mut params = Vec::new();
@@ -42,6 +61,9 @@ pub fn build_query_url(
     }
     if asc {
         params.push(("asc".to_string(), "true".to_string()));
+    }
+    if from > 0 {
+        params.push(("from".to_string(), from.to_string()));
     }
     if show != SelectedPageColumns::default() {
         params.push(("show".to_string(), show.to_query_value()));

@@ -14,8 +14,7 @@ use mlm_core::ContextExt;
 use mlm_db::{DatabaseExt as _, Flags, Language, OldCategory, SelectedTorrent, Timestamp};
 
 use super::types::{
-    SelectedBulkAction, SelectedData, SelectedPageColumns, SelectedPageFilter, SelectedPageSort,
-    SelectedUserInfo,
+    SelectedBulkAction, SelectedData, SelectedPageFilter, SelectedPageSort, SelectedUserInfo,
 };
 #[cfg(feature = "server")]
 use super::types::{SelectedMeta, SelectedRow};
@@ -25,7 +24,7 @@ pub async fn get_selected_data(
     sort: Option<SelectedPageSort>,
     asc: bool,
     filters: Vec<(SelectedPageFilter, String)>,
-    show: SelectedPageColumns,
+    include_removed: bool,
     from: Option<usize>,
     page_size: Option<usize>,
 ) -> Result<SelectedData, ServerFnError> {
@@ -48,7 +47,7 @@ pub async fn get_selected_data(
                 None
             }
         })
-        .filter(|t| show.removed_at || t.removed_at.is_none())
+        .filter(|t| include_removed || t.removed_at.is_none())
         .filter(|t| {
             filters.iter().all(|(field, value)| match field {
                 SelectedPageFilter::Kind => t.meta.media_type.as_str() == value,

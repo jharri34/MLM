@@ -49,6 +49,46 @@ test.describe('Selected torrents page', () => {
                 await expect(page.locator('body')).toContainText('Selected Book');
         });
 
+        test('keeps rows visible when sorting', async ({ page }) => {
+                await page.goto('/selected');
+                await noError(page);
+                await noLoading(page);
+                await expect(page.locator('body')).toContainText('Selected Book');
+
+                const firstTitle = page.locator('.torrents-grid-row a[href^="/torrents/"]').first();
+                await expect(firstTitle).toBeVisible();
+
+                const titleSort = page.locator('.header button.link', { hasText: 'Title' });
+                await expect(titleSort).toHaveCount(1);
+                await titleSort.click();
+                await noLoading(page);
+                await noError(page);
+                await expect(firstTitle).toBeVisible();
+        });
+
+        test('keeps rows visible when changing columns', async ({ page }) => {
+                await page.goto('/selected');
+                await noError(page);
+                await noLoading(page);
+                await expect(page.locator('body')).toContainText('Selected Book');
+
+                const firstTitle = page.locator('.torrents-grid-row a[href^="/torrents/"]').first();
+                await expect(firstTitle).toBeVisible();
+
+                const columnTrigger = page.locator('.column_selector_trigger').first();
+                await expect(columnTrigger).toBeVisible();
+                await columnTrigger.click();
+
+                const languageOption = page
+                        .locator('.column_selector_option:has-text("Language")')
+                        .first();
+                await expect(languageOption).toBeVisible();
+                await languageOption.click();
+                await noLoading(page);
+                await noError(page);
+                await expect(firstTitle).toBeVisible();
+        });
+
         test('shows the selected torrent stats above the table', async ({ page }) => {
                 await page.goto('/selected');
                 await noError(page);

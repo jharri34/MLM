@@ -16,6 +16,24 @@ use super::types::{
     filter_name,
 };
 
+type SelectedFetchKey = (
+    Option<SelectedPageSort>,
+    bool,
+    Vec<(SelectedPageFilter, String)>,
+    bool,
+    usize,
+);
+
+fn build_fetch_key(
+    sort: Option<SelectedPageSort>,
+    asc: bool,
+    filters: &[(SelectedPageFilter, String)],
+    include_removed: bool,
+    from: usize,
+) -> SelectedFetchKey {
+    (sort, asc, filters.to_vec(), include_removed, from)
+}
+
 #[component]
 pub fn SelectedPage() -> Element {
     let _route: crate::app::Route = use_route();
@@ -23,17 +41,26 @@ pub fn SelectedPage() -> Element {
     let initial_sort = initial_state.sort;
     let initial_asc = initial_state.asc;
     let initial_filters = initial_state.filters.clone();
+    let initial_from = initial_state.from;
     let initial_show = initial_state.show;
-    let initial_request_key = build_query_url(
+    let initial_url_key = build_query_url(
         initial_state.sort,
         initial_state.asc,
         &initial_state.filters,
+        initial_state.from,
         initial_state.show,
+    );
+    let initial_fetch_key = build_fetch_key(
+        initial_state.sort,
+        initial_state.asc,
+        &initial_state.filters,
+        initial_state.show.removed_at,
+        initial_state.from,
     );
 
     let sort = use_signal(move || initial_sort);
     let asc = use_signal(move || initial_asc);
-    let mut from = use_signal(|| 0usize);
+    let mut from = use_signal(move || initial_from);
     let filters = use_signal(move || initial_filters.clone());
     let show = use_signal(move || initial_show);
     let mut selected = use_signal(BTreeSet::<u64>::new);
@@ -42,7 +69,8 @@ pub fn SelectedPage() -> Element {
     let mut status_msg = use_signal(|| None::<(String, bool)>);
     let mut cached = use_signal(|| None::<SelectedData>);
     let loading_action = use_signal(|| false);
-    let mut last_request_key = use_signal(move || initial_request_key.clone());
+    let mut last_url_key = use_signal(move || initial_url_key.clone());
+    let mut last_fetch_key = use_signal(move || initial_fetch_key.clone());
     let mut last_selected_trigger = use_signal(|| 0u32);
 
     let mut selected_data = use_server_future(move || async move {
@@ -50,7 +78,7 @@ pub fn SelectedPage() -> Element {
             *sort.read(),
             *asc.read(),
             filters.read().clone(),
-            *show.read(),
+            show.read().removed_at,
             Some(*from.read()),
             Some(500),
         )
@@ -69,22 +97,42 @@ pub fn SelectedPage() -> Element {
 
     {
         let route_state = parse_query_state();
-        let route_request_key = build_query_url(
+        let route_url_key = build_query_url(
             route_state.sort,
             route_state.asc,
             &route_state.filters,
+            route_state.from,
             route_state.show,
         );
-        if *last_request_key.read() != route_request_key {
+        let route_fetch_key = build_fetch_key(
+            route_state.sort,
+            route_state.asc,
+            &route_state.filters,
+            route_state.show.removed_at,
+            route_state.from,
+        );
+        if *last_url_key.read() != route_url_key {
             let mut sort = sort;
             let mut asc = asc;
             let mut filters_signal = filters;
+            let mut from = from;
             let mut show = show;
             sort.set(route_state.sort);
             asc.set(route_state.asc);
             filters_signal.set(route_state.filters);
+            from.set(route_state.from);
             show.set(route_state.show);
-            last_request_key.set(route_request_key);
+            last_url_key.set(route_url_key);
+            let should_restart = *last_fetch_key.read() != route_fetch_key;
+            last_fetch_key.set(route_fetch_key);
+            if should_restart {
+                selected.set(BTreeSet::new());
+                if let Some(resource) = selected_data.as_mut() {
+                    resource.restart();
+                }
+            }
+        } else if *last_fetch_key.read() != route_fetch_key {
+            last_fetch_key.set(route_fetch_key);
             if let Some(resource) = selected_data.as_mut() {
                 resource.restart();
             }
@@ -128,13 +176,23 @@ pub fn SelectedPage() -> Element {
             *sort.read(),
             *asc.read(),
             &filters.read().clone(),
+            *from.read(),
             *show.read(),
         );
-        let should_restart = *last_request_key.read() != query_string;
-        if should_restart {
-            last_request_key.set(query_string.clone());
+        if *last_url_key.read() != query_string {
+            last_url_key.set(query_string.clone());
             set_location_query_string(&query_string);
-            from.set(0); // Reset to first page on query change
+        }
+
+        let fetch_key = build_fetch_key(
+            *sort.read(),
+            *asc.read(),
+            &filters.read().clone(),
+            show.read().removed_at,
+            *from.read(),
+        );
+        if *last_fetch_key.read() != fetch_key {
+            last_fetch_key.set(fetch_key);
             if let Some(resource) = selected_data.as_mut() {
                 resource.restart();
             }
@@ -592,12 +650,7 @@ pub fn SelectedPage() -> Element {
                             total: data.total,
                             from: data.from,
                             page_size: data.page_size,
-                            on_change: Callback::new(move |new_from| {
-                                from.set(new_from);
-                                if let Some(resource) = selected_data.as_mut() {
-                                    resource.restart();
-                                }
-                            }),
+                            on_change: Callback::new(move |new_from| from.set(new_from)),
                         }
                     }
                 }
