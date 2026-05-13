@@ -36,6 +36,8 @@ pub struct Config {
     #[serde(default = "default_import_interval", alias = "goodreads_interval")]
     pub import_interval: u64,
     #[serde(default)]
+    pub debug_mode: bool,
+    #[serde(default)]
     pub ignore_torrents: Vec<u64>,
 
     #[serde(default = "default_audio_types")]

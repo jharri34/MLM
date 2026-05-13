@@ -9,10 +9,13 @@ use qbit::{
     parameters::{AddTorrent, TorrentListParams},
 };
 use tokio::sync::RwLock;
+use tokio::time::sleep;
 
 use crate::config::{Config, QbitConfig};
 
 const CATEGORY_CACHE_TTL_SECS: u64 = 60;
+const RETRY_MAX_ATTEMPTS: u32 = 3;
+const RETRY_DELAY_MS: u64 = 500;
 
 #[derive(Clone)]
 pub struct CategoryCache {
@@ -57,6 +60,27 @@ impl Default for CategoryCache {
 }
 
 static CATEGORY_CACHE: Lazy<CategoryCache> = Lazy::new(CategoryCache::new);
+
+pub async fn retry_on_forbidden<T, F, Fut>(mut f: F) -> Result<T>
+where
+    F: FnMut() -> Fut,
+    Fut: std::future::Future<Output = Result<T>>,
+{
+    let mut attempt = 0;
+    loop {
+        match f().await {
+            Ok(result) => return Ok(result),
+            Err(e) => {
+                attempt += 1;
+                let error_string = e.to_string();
+                if attempt >= RETRY_MAX_ATTEMPTS || !error_string.contains("403") {
+                    return Err(e);
+                }
+                sleep(Duration::from_millis(RETRY_DELAY_MS * attempt as u64)).await;
+            }
+        }
+    }
+}
 
 pub async fn ensure_category_exists(
     qbit: &qbit::Api,

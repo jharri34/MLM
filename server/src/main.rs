@@ -295,9 +295,12 @@ async fn app_main() -> Result<()> {
             let stats = stats.clone();
             let grab = Arc::new(grab.clone());
             tokio::spawn(async move {
+                let mut first_run = true;
                 loop {
                     let interval = grab.search_interval.unwrap_or(config.search_interval);
-                    if interval > 0 {
+                    let skip_delay = first_run && config.debug_mode;
+
+                    if interval > 0 && !skip_delay {
                         select! {
                             () = sleep(Duration::from_secs(60 * grab.search_interval.unwrap_or(config.search_interval))) => {},
                             result = rx.changed() => {
@@ -320,6 +323,7 @@ async fn app_main() -> Result<()> {
                                 .await;
                         }
                     }
+                    first_run = false;
                     {
                         stats
                             .update(|stats| {
@@ -499,16 +503,38 @@ async fn app_main() -> Result<()> {
                 let stats = stats.clone();
                 let mut linker_rx = linker_rx.clone();
                 tokio::spawn(async move {
+                    let mut first_run = true;
                     loop {
-                        select! {
-                            () = sleep(Duration::from_secs(60 * config.link_interval)) => {},
-                            result = linker_rx.changed() => {
-                                if let Err(err) = result {
-                                    error!("Error listening on link_rx: {err:?}");
-                                    stats
-                                        .update(|stats| {
-                                            stats.linker_run_at = Some(OffsetDateTime::now_utc());
-                                            stats.linker_result = Some(Err(err.into()));
+                        let skip_delay = first_run && config.debug_mode;
+
+                        if !skip_delay {
+                            select! {
+                                () = sleep(Duration::from_secs(60 * config.link_interval)) => {},
+                                result = linker_rx.changed() => {
+                                    if let Err(err) = result {
+                                        error!("Error listening on link_rx: {err:?}");
+                                        stats
+                                            .update(|stats| {
+                                                stats.linker_run_at = Some(OffsetDateTime::now_utc());
+                                                stats.linker_result = Some(Err(err.into()));
+                                            })
+                                            .await;
+                                    }
+                                }
+                            }
+                        } else {
+                            let result = linker_rx.changed().await;
+                            if let Err(err) = result {
+                                error!("Error listening on link_rx: {err:?}");
+                                stats
+                                    .update(|stats| {
+                                        stats.linker_run_at = Some(OffsetDateTime::now_utc());
+                                        stats.linker_result = Some(Err(err.into()));
+                                    })
+                                    .await;
+                            }
+                        }
+                        first_run = false;
                                         }).await;
                                 }
                             },

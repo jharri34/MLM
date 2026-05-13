@@ -49,11 +49,14 @@ pub async fn link_torrents_to_library(
     qbit: (&QbitConfig, &qbit::Api),
     mam: Arc<MaM<'_>>,
 ) -> Result<()> {
-    let torrents = qbit
-        .1
-        .torrents(Some(TorrentListParams::default()))
-        .await
-        .context("qbit main data")?;
+    let torrents = crate::qbittorrent::retry_on_forbidden(|| async {
+        qbit.1
+            .torrents(Some(TorrentListParams::default()))
+            .await
+            .map_err(|e| anyhow::anyhow!(e))
+    })
+    .await
+    .context("qbit main data")?;
 
     for torrent in torrents {
         if torrent.progress < 1.0 {

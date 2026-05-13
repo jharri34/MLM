@@ -47,9 +47,10 @@ CMD ["/app/target/release/mlm"]
 # Again, our final image is the same - a slim base and just our app
 FROM debian:trixie-slim AS app
 RUN apt update && apt install -y ca-certificates && apt clean
-COPY ./server/assets /server/assets
+COPY ./server/assets /assets
 COPY --from=build /app/target/release/mlm /mlm
 ENV MLM_LOG_DIR=""
 ENV MLM_CONFIG_FILE="/config/config.toml"
 ENV MLM_DB_FILE="/data/data.db"
+ENV MLM_ASSETS_DIR="/assets"
 CMD ["/mlm"]
